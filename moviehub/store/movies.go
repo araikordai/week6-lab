@@ -1,6 +1,11 @@
 package store
 
-import "context"
+import (
+    "context"
+    "errors"
+
+    "github.com/jackc/pgx/v5"
+)
 
 type Movie struct {
     ID      int64   `json:"id"`
@@ -11,7 +16,10 @@ type Movie struct {
     Rating  float64 `json:"rating"`
     Poster  *string `json:"poster"`
 }
-
+type MovieDetail struct {
+    Movie
+    Detail *string `json:"detail"`
+}
 // SearchMovies ค่าจากผู้ใช้เดินทางผ่าน $1 แยกจากคำสั่งเสมอ
 func (s *Store) SearchMovies(ctx context.Context, q string) ([]Movie, error) {
     rows, err := s.Pool.Query(ctx,
@@ -38,4 +46,23 @@ func (s *Store) SearchMovies(ctx context.Context, q string) ([]Movie, error) {
         out = append(out, m)
     }
     return out, rows.Err()
+}
+func (s *Store) GetMovie(ctx context.Context, id int64) (MovieDetail, error) {
+    var m MovieDetail
+    err := s.Pool.QueryRow(ctx,
+        `SELECT m.id, m.title, m.title_th,
+                (SELECT coalesce(g.name_th, g.name_en) FROM movie_genres mg
+                   JOIN genres g ON g.id = mg.genre_id
+                  WHERE mg.movie_id = m.id AND mg.position = 0),
+                extract(year FROM m.release_date)::int,
+                round(m.vote_average, 1)::float8,
+                'https://image.tmdb.org/t/p/w500' || m.poster_path,
+                coalesce(m.overview_th, m.overview)
+         FROM movies m
+         WHERE m.id = $1`, id).
+        Scan(&m.ID, &m.Title, &m.TitleTh, &m.Genre, &m.Year, &m.Rating, &m.Poster, &m.Detail)
+    if errors.Is(err, pgx.ErrNoRows) {
+        return m, ErrNotFound
+    }
+    return m, err
 }
